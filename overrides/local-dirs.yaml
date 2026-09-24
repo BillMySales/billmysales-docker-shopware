@@ -1,0 +1,47 @@
+# Keep the stack's data in local directories instead of named volumes, so it
+# is visible from the host (and easy to include in host-level backups).
+#
+# In .env:
+#   COMPOSE_FILE=compose.yaml:overrides/local-dirs.yaml
+#   DATA_DIR=./data        # optional, default ./data (relative to compose.yaml)
+#
+# Only the directories you keep here change; delete the lines you don't need
+# (e.g. keep just `media`, `files` and `backups`). Existing data in the named
+# volumes is NOT moved: switch before the first `up`, or restore a backup
+# afterwards.
+# On macOS, bind mounts are slower than named volumes, and files created by
+# root show as root-owned (writes still work). On Linux, create the
+# directories owned by UID 82 (Shopware runs as www-data, 82) before the first
+# `up`: mkdir -p data/{files,theme,media,thumbnail,sitemap} && sudo chown -R 82:82 data
+# Backup files are root-owned with mode 0600.
+
+x-sw-dirs: &sw-dirs
+  - ${DATA_DIR:-./data}/files:/var/www/html/files
+  - ${DATA_DIR:-./data}/theme:/var/www/html/public/theme
+  - ${DATA_DIR:-./data}/media:/var/www/html/public/media
+  - ${DATA_DIR:-./data}/thumbnail:/var/www/html/public/thumbnail
+  - ${DATA_DIR:-./data}/sitemap:/var/www/html/public/sitemap
+
+services:
+  db:
+    volumes:
+      - ${DATA_DIR:-./data}/db:/var/lib/mysql
+  setup:
+    volumes: *sw-dirs
+  shopware:
+    volumes: *sw-dirs
+  worker:
+    volumes: *sw-dirs
+  scheduler:
+    volumes: *sw-dirs
+  console:
+    volumes: *sw-dirs
+  caddy:
+    volumes:
+      - ${DATA_DIR:-./data}/caddy/data:/data
+      - ${DATA_DIR:-./data}/caddy/config:/config
+  backup:
+    volumes:
+      - ${DATA_DIR:-./data}/files:/var/www/html/files
+      - ${DATA_DIR:-./data}/media:/var/www/html/public/media
+      - ${DATA_DIR:-./data}/backups:/backups

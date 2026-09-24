@@ -1,0 +1,17 @@
+# Stack settings, added to the project at build time.
+shopware:
+    # Background jobs run in the stack's `worker` service, not in the browser
+    # of whoever has the administration open.
+    admin_worker:
+        enable_admin_worker: false
+
+monolog:
+    handlers:
+        # Logs to stderr (docker compose logs) instead of files in var/log.
+        main:
+            type: stream
+            path: "php://stderr"
+            level: "%env(string:default:log_level_default:LOG_LEVEL)%"
+
+parameters:
+    log_level_default: warning

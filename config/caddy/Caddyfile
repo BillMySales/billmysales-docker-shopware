@@ -1,0 +1,46 @@
+# Caddy in front of the Shopware container (FrankenPHP, plain HTTP on :8000):
+# TLS, the public site address and security headers. Shopware's own web
+# rules live in the FrankenPHP image (/etc/caddy/Caddyfile).
+{
+	# No admin API: config is static, reloads happen by restarting the container.
+	admin off
+
+	servers {
+		# Behind a reverse proxy on a private network, log the real client IP
+		# and pass its X-Forwarded-* headers on to Shopware.
+		trusted_proxies static private_ranges
+	}
+}
+
+(shopware) {
+	encode zstd gzip
+
+	# Same variable as PHP's upload limit (PHP_MAX_UPLOAD_SIZE).
+	request_body {
+		max_size {$UPLOAD_MAX_SIZE}
+	}
+
+	header {
+		?X-Content-Type-Options nosniff
+		?X-Frame-Options SAMEORIGIN
+		?Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	reverse_proxy shopware:8000
+}
+
+# Public site. SITE_ADDRESS is ":80" for plain HTTP (local, or behind another
+# proxy) or a domain name, which makes Caddy obtain and renew a certificate
+# automatically ("localhost" uses Caddy's internal CA).
+{$SITE_ADDRESS} {
+	import shopware
+	log {
+		output stdout
+	}
+}
+
+# Internal-only site (port not published) for the container healthcheck.
+:8080 {
+	import shopware
+}

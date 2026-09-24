@@ -1,0 +1,29 @@
+# Mount a plugin from a local directory into custom/plugins, editable live.
+# Shopware's deployment helper (the `setup` service) installs and activates
+# every plugin it finds on the next `docker compose up`.
+# Note: code changes may need a cache clear to show up
+# (docker compose run --rm console cache:clear).
+#
+# In .env:
+#   COMPOSE_FILE=compose.yaml:overrides/plugin.yaml
+#   PLUGIN_PATH=../MyPlugin   # plugin source, relative to compose.yaml
+#   PLUGIN_NAME=MyPlugin      # directory name under custom/plugins (the plugin's name)
+
+x-plugin: &plugin ${PLUGIN_PATH:?Set PLUGIN_PATH in .env}:/var/www/html/custom/plugins/${PLUGIN_NAME:?Set PLUGIN_NAME in .env}
+
+services:
+  setup:
+    volumes:
+      - *plugin
+  shopware:
+    volumes:
+      - *plugin
+  worker:
+    volumes:
+      - *plugin
+  scheduler:
+    volumes:
+      - *plugin
+  console:
+    volumes:
+      - *plugin

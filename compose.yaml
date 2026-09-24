@@ -1,0 +1,291 @@
+# Shopware 6 stack: Caddy (TLS) + Shopware (FrankenPHP, own image on
+# Shopware's docker-base) + MariaDB, with setup, queue worker, scheduled tasks
+# and optional backups and Mailpit.
+#
+# Quick start (development):
+#   cp .env.dev.example .env
+#   docker compose up -d
+#   docker compose logs -f setup   # wait for "==> Done"
+#
+# Production: start from .env.prod.example instead. See README.md.
+#
+# Required variables have no default: compose refuses to start without them.
+
+name: ${COMPOSE_PROJECT_NAME:-shopware}
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: ${LOG_MAX_SIZE:-10m}
+    max-file: "${LOG_MAX_FILE:-3}"
+
+# Shopware image, built from image/Dockerfile (project created with
+# shopware-cli, copied into ghcr.io/shopware/docker-base:<php>-frankenphp).
+x-sw-image: &sw-image
+  image: ${SW_IMAGE:-shopware-frankenphp}:${SW_VERSION:-6.7.14.2}-php${PHP_VERSION:-8.5}
+  build:
+    context: ./image
+    args:
+      PHP_VERSION: ${PHP_VERSION:-8.5}
+      SW_VERSION: ${SW_VERSION:-6.7.14.2}
+
+# Environment shared by every Shopware container.
+x-sw-env: &sw-env
+  APP_ENV: prod
+  APP_URL: ${SW_URL:?Set SW_URL in .env (e.g. https://shop.example.com)}
+  APP_SECRET: ${APP_SECRET:?Set APP_SECRET in .env (openssl rand -hex 32)}
+  INSTANCE_ID: ${INSTANCE_ID:?Set INSTANCE_ID in .env (openssl rand -hex 16)}
+  DATABASE_URL: mysql://${DB_USER:-shopware}:${DB_PASSWORD:?Set DB_PASSWORD in .env}@db:3306/${DB_NAME:-shopware}
+  # Caddy in front: trust its X-Forwarded-* headers (HTTPS detection).
+  SYMFONY_TRUSTED_PROXIES: private_ranges
+  SYMFONY_TRUSTED_HEADERS: x-forwarded-for,x-forwarded-host,x-forwarded-port,x-forwarded-proto
+  SHOPWARE_HTTP_CACHE_ENABLED: ${SW_HTTP_CACHE:-1}
+  LOG_LEVEL: ${LOG_LEVEL:-warning}
+  # PHP settings of the docker-base image.
+  PHP_DISPLAY_ERRORS: ${PHP_DISPLAY_ERRORS:-Off}
+  PHP_MEMORY_LIMIT: ${PHP_MEMORY_LIMIT:-512m}
+  PHP_MAX_UPLOAD_SIZE: ${UPLOAD_MAX_SIZE:-64M}
+  PHP_MAX_EXECUTION_TIME: ${PHP_MAX_EXECUTION_TIME:-300}
+
+# Shopware's writable directories (everything else is immutable, in the image).
+x-sw-volumes: &sw-volumes
+  - files:/var/www/html/files
+  - theme:/var/www/html/public/theme
+  - media:/var/www/html/public/media
+  - thumbnail:/var/www/html/public/thumbnail
+  - sitemap:/var/www/html/public/sitemap
+
+services:
+  db:
+    image: mariadb:${MARIADB_VERSION:-12.3}
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      MARIADB_DATABASE: ${DB_NAME:-shopware}
+      MARIADB_USER: ${DB_USER:-shopware}
+      MARIADB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?Set DB_ROOT_PASSWORD in .env}
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: ${DB_MEMORY_LIMIT:-1g}
+
+  # One-shot job: install or upgrade (Shopware's deployment helper), then
+  # URL/SMTP/initial settings. Safe to repeat; runs on every `up`.
+  setup:
+    <<: *sw-image
+    logging: *logging
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      <<: *sw-env
+      INSTALL_ADMIN_USERNAME: ${SW_ADMIN_USER:-admin}
+      INSTALL_ADMIN_PASSWORD: ${SW_ADMIN_PASSWORD:?Set SW_ADMIN_PASSWORD in .env}
+      INSTALL_ADMIN_EMAIL: ${SW_ADMIN_EMAIL:?Set SW_ADMIN_EMAIL in .env}
+      INSTALL_LOCALE: ${SW_LOCALE:-en-GB}
+      INSTALL_CURRENCY: ${SW_CURRENCY:-CLP}
+      SALES_CHANNEL_URL: ${SW_URL:?Set SW_URL in .env (e.g. https://shop.example.com)}
+      SW_URL: ${SW_URL:?Set SW_URL in .env (e.g. https://shop.example.com)}
+      SW_SHOP_NAME: ${SW_SHOP_NAME:-Shopware}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+    volumes:
+      - files:/var/www/html/files
+      - theme:/var/www/html/public/theme
+      - media:/var/www/html/public/media
+      - thumbnail:/var/www/html/public/thumbnail
+      - sitemap:/var/www/html/public/sitemap
+      - ./scripts:/usr/local/share/stack/scripts:ro
+    entrypoint: ["sh", "/usr/local/share/stack/scripts/setup.sh"]
+    restart: "no"
+
+  # Shopware (FrankenPHP: web server + PHP, plain HTTP on :8000, internal).
+  shopware:
+    <<: *sw-image
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    environment:
+      <<: *sw-env
+    # Lets Shopware reach services on the host (e.g. an app running locally)
+    # at http://host.docker.internal:<port>, also on Linux.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes: *sw-volumes
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8000/api/_info/health-check"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: ${SW_MEMORY_LIMIT:-1g}
+
+  # Message queue worker (async and low priority jobs). Restarts every
+  # WORKER_TIME_LIMIT seconds to release memory, as Shopware recommends.
+  worker:
+    <<: *sw-image
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    environment:
+      <<: *sw-env
+    volumes: *sw-volumes
+    entrypoint: ["php", "bin/console", "messenger:consume", "async", "low_priority",
+                 "--time-limit=${WORKER_TIME_LIMIT:-300}", "--memory-limit=${WORKER_MEMORY_LIMIT:-384M}"]
+    healthcheck:
+      # PID 1 is the long-running console command (the image has no ps/pgrep).
+      test: ["CMD-SHELL", "tr '\\0' ' ' < /proc/1/cmdline | grep -q messenger:consume"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: ${WORKER_CONTAINER_MEMORY_LIMIT:-512m}
+
+  # Scheduled tasks (sitemaps, cleanups, ...): queues due tasks for the worker.
+  scheduler:
+    <<: *sw-image
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    environment:
+      <<: *sw-env
+    volumes: *sw-volumes
+    entrypoint: ["php", "bin/console", "scheduled-task:run", "--memory-limit=256M"]
+    healthcheck:
+      # PID 1 is the long-running console command (the image has no ps/pgrep).
+      test: ["CMD-SHELL", "tr '\\0' ' ' < /proc/1/cmdline | grep -q scheduled-task:run"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: ${SCHEDULER_MEMORY_LIMIT:-384m}
+
+  caddy:
+    image: caddy:${CADDY_VERSION:-2.11}-alpine
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      shopware:
+        condition: service_healthy
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+      UPLOAD_MAX_SIZE: ${UPLOAD_MAX_SIZE:-64M}
+    ports:
+      - "${HTTP_BIND:-127.0.0.1}:${HTTP_PORT:-80}:80"
+      - "${HTTP_BIND:-127.0.0.1}:${HTTPS_PORT:-443}:443"
+      - "${HTTP_BIND:-127.0.0.1}:${HTTPS_PORT:-443}:443/udp"
+    volumes:
+      - ./config/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # TLS certificates and keys (keep them: ACME rate limits).
+      - caddy_data:/data
+      - caddy_config:/config
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8080/api/_info/health-check"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: ${CADDY_MEMORY_LIMIT:-256m}
+
+  # Optional (profile "backup"): DB dump + private files and media every
+  # BACKUP_INTERVAL_HOURS, kept BACKUP_KEEP_DAYS days in the `backups` volume
+  # (overrides/local-dirs.yaml puts them in a local directory instead).
+  backup:
+    image: mariadb:${MARIADB_VERSION:-12.3}
+    profiles: ["backup"]
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    environment:
+      DB_HOST: db
+      DB_NAME: ${DB_NAME:-shopware}
+      DB_USER: ${DB_USER:-shopware}
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-24}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-7}
+    volumes:
+      # Read-write so `backup.sh restore` can put the files back.
+      - files:/var/www/html/files
+      - media:/var/www/html/public/media
+      - backups:/backups
+      - ./scripts/backup.sh:/usr/local/bin/backup.sh:ro
+    entrypoint: ["bash", "/usr/local/bin/backup.sh"]
+    healthcheck:
+      test: ["CMD", "bash", "/usr/local/bin/backup.sh", "health"]
+      interval: 5m
+      timeout: 10s
+      retries: 3
+      start_period: 5m
+    deploy:
+      resources:
+        limits:
+          memory: ${BACKUP_MEMORY_LIMIT:-512m}
+
+  # Optional (profile "mailpit", development): catches all outgoing mail.
+  # Set SMTP_HOST=mailpit and SMTP_PORT=1025; web UI on MAILPIT_PORT.
+  mailpit:
+    image: axllent/mailpit:${MAILPIT_VERSION:-v1.31}
+    profiles: ["mailpit"]
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    ports:
+      - "${HTTP_BIND:-127.0.0.1}:${MAILPIT_PORT:-8025}:8025"
+
+  # Shopware's console (profile "tools"), e.g.:
+  #   docker compose run --rm console plugin:list
+  console:
+    <<: *sw-image
+    profiles: ["tools"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      <<: *sw-env
+    volumes: *sw-volumes
+    entrypoint: ["php", "bin/console"]
+    command: ["list"]
+
+volumes:
+  db_data:
+  files:
+  theme:
+  media:
+  thumbnail:
+  sitemap:
+  caddy_data:
+  caddy_config:
+  backups:
