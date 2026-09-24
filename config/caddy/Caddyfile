@@ -20,12 +20,12 @@
 		max_size {$UPLOAD_MAX_SIZE}
 	}
 
-	header {
-		?X-Content-Type-Options nosniff
-		?X-Frame-Options SAMEORIGIN
-		?Referrer-Policy strict-origin-when-cross-origin
-		-Server
-	}
+	# One directive per header: in a single `header { }` block, Caddy applies
+	# the "?" (set if missing) fields together, only when all are missing.
+	header ?X-Content-Type-Options nosniff
+	header ?X-Frame-Options SAMEORIGIN
+	header ?Referrer-Policy strict-origin-when-cross-origin
+	header -Server
 
 	reverse_proxy shopware:8000
 }
