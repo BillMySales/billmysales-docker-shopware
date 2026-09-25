@@ -21,6 +21,10 @@ data directories are volumes. A separate Caddy container in front handles TLS
 and the public address, like in the other stacks. Shopware 6.7.14.2 supports
 PHP 8.2 to 8.5.
 
+Why FrankenPHP and not the image's PHP-FPM variant: with FPM, a separate web
+server needs the files, so the code would have to be copied into a shared
+volume; FrankenPHP serves it straight from the image, which stays immutable.
+
 Requirements
 ------------
 
@@ -30,7 +34,9 @@ Requirements
 - Production: a server with ports 80 and 443 reachable, and a DNS record for
   the store's domain pointing to it.
 - The first `up` builds the image (about a minute; it downloads Shopware with
-  Composer).
+  Composer). The project is always created inside Docker: on a macOS bind
+  mount (case-insensitive file system) Composer breaks packages like
+  `symfony/intl`.
 
 Quick start (development)
 -------------------------
@@ -208,7 +214,9 @@ Notes:
   `X-Forwarded-*` headers (HTTPS links behind the proxy). Caddy drops a
   client's `X-Forwarded-Port` (it doesn't reset that one like the others),
   so URLs can't get a forged port.
-- Logs go to stderr (`docker compose logs`) at `LOG_LEVEL` (default `warning`).
+- Logs go to stderr (`docker compose logs`) at `LOG_LEVEL` (default `warning`;
+  `info` floods the log with deprecation notices, the development template
+  uses `notice`).
 - Search uses the database; OpenSearch is not included.
 - From inside the containers, the host machine is reachable as
   `host.docker.internal`.
@@ -218,6 +226,8 @@ Security
 
 - No default secrets: compose fails if the required values are missing. The
   development template uses public values; never use it on a server.
+- `APP_SECRET` and `INSTANCE_ID` are required because the project's `.env`
+  baked into the image contains generated values: never rely on them.
 - PHP errors are never shown to visitors (`display_errors` off unless
   `PHP_DISPLAY_ERRORS=On`, only in the development template).
 - Production mode (`APP_ENV=prod`), immutable code in the image, only
