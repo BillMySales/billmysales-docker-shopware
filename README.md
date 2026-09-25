@@ -130,14 +130,18 @@ every `BACKUP_INTERVAL_HOURS`, and deletes files older than
 `BACKUP_KEEP_DAYS`. Files are readable by their owner only.
 
 ```shell
-docker compose run --rm backup now                  # back up now
-docker compose run --rm backup list                 # list timestamps
+docker compose run --rm --no-deps backup now                  # back up now
+docker compose run --rm --no-deps backup list                 # list timestamps
 docker compose stop shopware worker scheduler       # recommended while restoring
-docker compose run --rm backup restore <timestamp>  # restore DB and files
+docker compose run --rm --no-deps backup restore <timestamp>  # restore DB and files
 docker compose start shopware worker scheduler
 docker compose run --rm console cache:clear
 docker compose run --rm console media:generate-thumbnails   # if needed
 ```
+
+`--no-deps` keeps the command from starting `setup` first (with damaged
+data `setup` fails and the restore would never run); the database must
+be running (`docker compose up -d db` if the stack is down).
 
 Overrides
 ---------
