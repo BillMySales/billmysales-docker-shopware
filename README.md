@@ -205,7 +205,9 @@ Notes:
 - Shopware's web rules (front controller, static media/theme/bundles) are in
   the runtime image; the root is `public/`, so nothing outside it is reachable.
 - `SYMFONY_TRUSTED_PROXIES=private_ranges` makes Shopware trust Caddy's
-  `X-Forwarded-*` headers (HTTPS links behind the proxy).
+  `X-Forwarded-*` headers (HTTPS links behind the proxy). Caddy drops a
+  client's `X-Forwarded-Port` (it doesn't reset that one like the others),
+  so URLs can't get a forged port.
 - Logs go to stderr (`docker compose logs`) at `LOG_LEVEL` (default `warning`).
 - Search uses the database; OpenSearch is not included.
 - From inside the containers, the host machine is reachable as

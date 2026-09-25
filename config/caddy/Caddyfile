@@ -27,7 +27,12 @@
 	header ?Referrer-Policy strict-origin-when-cross-origin
 	header -Server
 
-	reverse_proxy shopware:8000
+	reverse_proxy shopware:8000 {
+		# Caddy doesn't reset X-Forwarded-Port (unlike -For/-Proto/-Host) for
+		# untrusted clients, and Symfony trusts it from Caddy: URLs would get a
+		# forged port. The port is in the Host header anyway.
+		header_up -X-Forwarded-Port
+	}
 }
 
 # Public site. SITE_ADDRESS is ":80" for plain HTTP (local, or behind another
