@@ -57,7 +57,8 @@ Production
 ```shell
 cp .env.prod.example .env
 # Fill in SW_URL, SITE_ADDRESS, APP_SECRET, INSTANCE_ID, DB_PASSWORD,
-# DB_ROOT_PASSWORD, SW_ADMIN_PASSWORD, SW_ADMIN_EMAIL and the SMTP_* values.
+# DB_ROOT_PASSWORD, SW_ADMIN_PASSWORD and SW_ADMIN_EMAIL.
+# Recommended: the SMTP_* values (without SMTP_HOST no emails are sent).
 docker compose up -d
 ```
 
@@ -66,6 +67,8 @@ docker compose up -d
 - Behind an existing Traefik (no host ports), use `overrides/traefik.yaml`
   (see [Overrides](#overrides)).
 - Compose refuses to start while a required value is missing.
+- Configure SMTP (recommended, not required): without `SMTP_HOST` no emails
+  are sent (the image has no local mail server).
 - `DB_PASSWORD` goes into `DATABASE_URL`: use URL-safe characters
   (`openssl rand -hex 24`).
 - Rebuild regularly to get PHP and OS security fixes:
@@ -181,7 +184,8 @@ Every variable is documented in `.env.prod.example`. Main groups:
   `HTTPS_PORT`.
 - **Secrets and credentials** (required): `APP_SECRET`, `INSTANCE_ID`,
   `DB_PASSWORD`, `DB_ROOT_PASSWORD`, `SW_ADMIN_PASSWORD`, `SW_ADMIN_EMAIL`;
-  `SW_ADMIN_USER`.
+  `SW_ADMIN_USER`. The `SW_ADMIN_*` values are only used by the installer:
+  changing them later doesn't change the account.
 - **Store** (first install only): `SW_SHOP_NAME`, `SW_LOCALE` (`en-GB` or
   `de-DE`; other languages need a language pack plugin), `SW_CURRENCY`
   (default `CLP`).

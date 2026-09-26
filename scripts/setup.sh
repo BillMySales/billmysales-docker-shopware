@@ -7,8 +7,9 @@
 #   migrations when the image's version changed, refreshes plugins and
 #   compiles the theme into the shared `theme` volume.
 # - The storefront URL follows SW_URL (it is stored in the database).
-# - SMTP settings follow SMTP_* when SMTP_HOST is set.
-# - Initial settings (shop name and email) are applied once (marker
+# - SMTP settings (and the shop email, from SMTP_FROM) follow SMTP_* when
+#   SMTP_HOST is set.
+# - Initial settings (shop name) are applied once (marker
 #   core.dockerStack.initialized); later changes in the administration are kept.
 set -eu
 
